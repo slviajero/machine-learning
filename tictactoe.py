@@ -4,15 +4,17 @@ from random import randrange
 class Board:
 
 	def __init__(self):
+
+		# basic parameters
 		self.dim=3
 		self.cross='x'
 		self.circle='o'
 		self.blank=' '
-		self.history=[]
-		self.winner=None
-		self.moves_left=9
-		self.erase()
+		
+		# variables of the board
+		self.board=self.emptyboard()
 		self.status=self.scan()
+		self.history=[]
 
 	def print(self):
 		line=self.board[0]
@@ -25,12 +27,28 @@ class Board:
 		print("{}|{}|{}".format(line[0], line[1], line[2]))
 		print("")
 
+	def emptyboard(self):
+		b=[]
+		emptyline=[]
+		for i in range(0,self.dim):
+			emptyline.append(self.blank)
+		for i in range(0,self.dim):
+			b.append(emptyline[:])
+		return b
+
 	def erase(self):
-		self.board=[ [self.blank, self.blank, self.blank], [self.blank, self.blank, self.blank], [self.blank, self.blank, self.blank]]
+		self.board=self.emptyboard()
+		self.status=self.scan()
 		self.history=[]
-		self.winner=None
-		self.moves_left=9
-		self.scan()
+
+	def copy(self):
+		b=Board()
+		for i in range(0,self.dim):
+			for j in range(0,self.dim):
+				b.board[i][j]=self.board[i][j]
+		b.history=self.history.copy()
+		b.status=b.scan()
+		return b
 
 	def allowed_moves(self):
 		moves=[]
@@ -85,7 +103,6 @@ class Board:
 					potentiallines.append((i, symbol))
 
 		status={ 'lines' : lines, 'winnerlines' : winnerlines, 'potentiallines' : potentiallines}
-
 		return status
 
 	def scancolumns(self):
@@ -176,35 +193,34 @@ class Board:
 		diags=self.scandiags()
 		moves=self.allowed_moves()
 
-		status=lines
+		status={}
+		status.update(lines)
 		status.update(columns)
 		status.update(diags)
 		status.update({'moves' : moves})
 
-		self.status=status
+		winnerlines=status['winnerlines']
+		winnercolumns=status['winnercolumns']
+		winnerdiags=status['winnerdiags']
 
-		winnerlines=self.status['winnerlines']
-		winnercolumns=self.status['winnercolumns']
-		winnerdiags=self.status['winnerdiags']
+		winner=''
 
 		if winnerlines!=[]:
-			winner=winnerlines.pop(0)
-			self.winner=winner[1]
+			winner=winnerlines.pop(0)[1]
+		elif winnercolumns!=[]:
+			winner=winnercolumns.pop(0)[1]		
+		elif winnerdiags!=[]:
+			winner=winnerdiags.pop(0)[1]
+		elif len(moves)==0:
+				winner=self.blank
+		else:
+			winner='n'
 
-		if winnercolumns!=[]:
-			winner=winnercolumns.pop(0)
-			self.winner=winner[1]		
-
-		if winnerdiags!=[]:
-			winner=winnerdiags.pop(0)
-			self.winner=winner[1]
-
-		self.moves_left=len(moves)
+		status.update({'winner' : winner})
 
 		return status
 
 	def move(self, m, s):
-
 		moves=self.status['moves']
 		if m in moves:
 			 if s==self.cross:
@@ -217,10 +233,20 @@ class Board:
 		else:
 			print("Illegal move")
 			raise ValueError
-
 		self.history.append((m, s))
-		self.scan()
+		self.status=self.scan()
+		return self.winner()
 
+	def replay(self, history):
+		self.erase()
+		while h in history:
+			move=h[0]
+			symbol=h[1]
+			self.move(move, symbol)
+
+
+	def winner(self):
+		return self.status['winner']
 
 class Player:
 
@@ -339,42 +365,41 @@ class Game:
 
 	def play(self):
 
+		if self.verbose:
+			self.board.print()
 		while True:
 			next(self.pcross)
+			w=self.board.winner()
 			if self.verbose:
 				self.board.print()
-			if self.board.winner!=None:
-				w=self.board.winner
-				break
-			if self.board.moves_left==0:
-				w=self.board.blank
+				print(w)
+			if w!='n':
 				break
 			next(self.pcircle)
+			w=self.board.winner()
 			if self.verbose:
 				self.board.print()
-			if self.board.winner!=None:
-				w=self.board.winner
-				break
-			if self.board.moves_left==0:
-				w=self.board.blank
+				print(w)
+			if w!='n':
 				break
 
 		return w
 
-board=Board()
-result={board.cross : 0, board.circle : 0, board.blank : 0}
-pcross=PlayerPlus(board, board.cross)
-pcircle=PlayerPlus(board, board.circle)
-game=Game(board, pcross, pcircle)
-game.set_verbose(False)
-for i in range(0,1000):
-	game.reset()
-	w=game.play()
-	result[w]+=1
+if True:
+	board=Board()
+	result={board.cross : 0, board.circle : 0, board.blank : 0}
+	pcross=PlayerPlus(board, board.cross)
+	pcircle=Player(board, board.circle)
+	game=Game(board, pcross, pcircle, verbose=False)
+	for i in range(0,10):
+		game.reset()
+		w=game.play()
+		result[w]+=1
 	# if w==board.blank:
 	#	print("============== No winner - draw =================")
 	#else:
 	#	print("============== Winner is  - {}  ==================".format(w))
+
 
 print(result)
 
