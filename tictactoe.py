@@ -1,4 +1,4 @@
-from random import randrange 
+from random import randrange, random 
 
 
 class Board:
@@ -160,8 +160,6 @@ class Board:
 						break
 				potentialdiags.append((0, symbol))
 
-
-
 		q=0
 		for k in range(0, self.dim):
 			if self.notblank(k, self.dim-k-1):
@@ -186,6 +184,61 @@ class Board:
 		status={ 'diags' : diags, 'winnerdiags' : winnerdiags, 'potentialdiags' : potentialdiags}
 		return status
 
+	# do I win in one move or do I lose in one move
+	# not the best possible implementation
+	def onemove(self, status):
+
+		moves=status['moves']
+		cross_wins=[]
+		circle_wins=[]
+		potentiallines=status['potentiallines']
+		potentialcolumns=status['potentialcolumns']
+		potentialdiags=status['potentialdiags']
+		while potentiallines!=[]:
+			potential=potentiallines.pop(0)
+			i=potential[0]
+			for j in range(0, self.dim):
+				if not self.notblank(i, j):
+					if potential[1]==self.cross:
+						cross_wins.append((i, j))
+					else:
+						circle_wins.append((i, j))
+					break
+		while potentialcolumns!=[]:
+			potential=potentialcolumns.pop(0)
+			j=potential[0]
+			for i in range(0, self.dim):
+				if not self.notblank(i, j):
+					if potential[1]==self.cross:
+						cross_wins.append((i, j))
+					else:
+						circle_wins.append((i, j))
+					break
+		while potentialdiags!=[]:
+			potential=potentialdiags.pop(0)
+			d=potential[0]
+			if d==0:
+				for k in range(0, self.dim):
+					if not self.notblank(k, k):
+						if potential[1]==self.cross:
+							cross_wins.append((k, k))
+						else:
+							circle_wins.append((k, k))
+						break
+						if potential[1]==self.mysymbol:
+							i_win.append((k, k))
+						break
+			if d==1:
+				for k in range(0, self.dim):
+					if not self.notblank(k, self.dim-k-1):
+						if potential[1]==self.cross:
+							cross_wins.append((k, self.dim-k-1))
+						else:
+							circle_wins.append((k, self.dim-k-1))					
+						break
+
+		return cross_wins, circle_wins
+
 	def scan(self):
 
 		lines=self.scanlines()
@@ -203,14 +256,19 @@ class Board:
 		winnercolumns=status['winnercolumns']
 		winnerdiags=status['winnerdiags']
 
+		cross_wins, circle_wins = self.onemove(status)
+
+		status.update({'circle_wins' : circle_wins})
+		status.update({'cross_wins'  : cross_wins})
+
 		winner=''
 
 		if winnerlines!=[]:
-			winner=winnerlines.pop(0)[1]
+			winner=winnerlines[0][1]
 		elif winnercolumns!=[]:
-			winner=winnercolumns.pop(0)[1]		
+			winner=winnercolumns[0][1]		
 		elif winnerdiags!=[]:
-			winner=winnerdiags.pop(0)[1]
+			winner=winnerdiags[0][1]
 		elif len(moves)==0:
 				winner=self.blank
 		else:
@@ -237,18 +295,27 @@ class Board:
 		self.status=self.scan()
 		return self.winner()
 
-	def replay(self, history):
+	def replay(self, history, n=9):
+		h=len(history)
+		if n<0:
+			n=h-n
+		if n<=0:
+			return 0
+		i=0
 		self.erase()
-		while h in history:
+		for h in history:
 			move=h[0]
 			symbol=h[1]
 			self.move(move, symbol)
-
+			i+=1
+			if (i>=n):
+				break
+		return i
 
 	def winner(self):
 		return self.status['winner']
 
-class Player:
+class RandomPlayer:
 
 	def __init__(self, board, symbol):
 		self.board=board
@@ -268,46 +335,23 @@ class Player:
 		next_move=moves[r]
 		return next_move
 
-class PlayerPlus(Player):
+class OneMovePlayer(RandomPlayer):
 
 	def __init__(self, board, symbol):
 		super().__init__(board, symbol)
 
 	def calculate(self, b):
+		
 		status=b.scan()
 		moves=status['moves']
-		good_move=[]
-		potentiallines=status['potentiallines']
-		potentialcolumns=status['potentialcolumns']
-		potentialdiags=status['potentialdiags']
-		while potentiallines!=[]:
-			potential=potentiallines.pop(0)
-			i=potential[0]
-			for j in range(0,b.dim):
-				if not b.notblank(i, j):
-					good_move.append((i, j))
-					break
-		while potentialcolumns!=[]:
-			potential=potentialcolumns.pop(0)
-			j=potential[0]
-			for i in range(0,b.dim):
-				if not b.notblank(i, j):
-					good_move.append((i, j))
-					break
-		while potentialdiags!=[]:
-			potential=potentialdiags.pop(0)
-			d=potential[0]
-			if d==0:
-				for k in range(0,b.dim):
-					if not b.notblank(k, k):
-						good_move.append((k, k))
-						break
-			if d==1:
-				for k in range(0, b.dim):
-					if not b.notblank(k, b.dim-k-1):
-						good_move.append((k, b.dim-k-1))
-						break	
-
+		if self.mysymbol==b.cross:
+			i_win=status['cross_wins']
+			good_move=status['circle_wins']
+		else:
+			i_win=status['circle_wins']
+			good_move=status['cross_wins']
+		if len(i_win)>0:
+			next_move=i_win.pop()
 		if len(good_move)>0:
 			r=randrange(0, len(good_move))
 			next_move=good_move[r]
@@ -322,7 +366,42 @@ class PlayerPlus(Player):
 
 		return next_move
 
-class HumanPlayer(Player):
+class FunctionalPlayer(RandomPlayer):
+
+	def __init__(self, board, symbol, function):
+		self.function=function
+		super().__init__(board, symbol)
+
+	def calculate(self, b):
+
+		board=b.board
+		status=b.status
+		evaluated_moves=[]
+
+		moves=status['moves']
+		evaluated_moves=self.function(b, self.mysymbol)
+		total_weight=evaluated_moves[-1][1]
+
+		if total_weight>0:
+			r=random()*total_weight
+			weight1=0
+			for i in range(0, len(evaluated_moves)):
+				weight2=evaluated_moves[i][1]
+				if (r>weight1) and (r<=weight2):
+					next_move=evaluated_moves[i][0]
+					break
+				weight1=weight2
+		else:
+			raise ValueError
+
+		if False:
+			print("Board state:")
+			b.print()
+			print("New calculate produced move ", next_move)
+
+		return next_move
+
+class HumanPlayer(RandomPlayer):
 
 	def __init__(self, board, symbol):
 		super().__init__(board, symbol)
@@ -364,7 +443,6 @@ class Game:
 		self.board.erase()
 
 	def play(self):
-
 		if self.verbose:
 			self.board.print()
 		while True:
@@ -385,13 +463,77 @@ class Game:
 
 		return w
 
+
+def random_value_function(board, mysymbol):
+
+	evaluated_moves=[]
+	moves=board.status['moves']
+	total_weight=0
+	for move in moves:
+		move_value=0.5
+		total_weight+=move_value
+		evaluated_moves.append((move, total_weight))
+
+	return evaluated_moves
+
+
+def centercorner_value_function(board, symbol):
+
+	evaluated_moves=[]
+	moves=board.status['moves']
+	total_weight=0
+	for move in moves:
+		if move==(1,1):
+			move_value=1.0
+		elif move==(0,0) or move==(0,2) or move==(2,2) or move==(2, 0):
+			move_value=2.0
+		else:
+			move_value=0.25
+		total_weight+=move_value
+		evaluated_moves.append((move, total_weight))
+	return evaluated_moves
+
+
+def onemove_value_function(board, symbol):
+
+	evaluated_moves=[]
+	moves=board.status['moves']
+	status=board.status
+	if symbol==board.circle:
+		i_win=status['circle_wins']
+		good_move=status['cross_wins']
+	else:
+		i_win=status['cross_wins']
+		good_move=status['circle_wins']
+
+	total_weight=0
+	for move in moves:
+		if move in i_win:
+			move_value=1000
+		elif move in good_move:
+			move_value=10
+		else:
+			if move==(1,1):
+				move_value=1.0
+			elif move==(0,0) or move==(0,2) or move==(2,2) or move==(2, 0):
+				move_value=1.0
+			else:
+				move_value=0.25
+		total_weight+=move_value
+		evaluated_moves.append((move, total_weight))
+	return evaluated_moves
+
 if True:
 	board=Board()
 	result={board.cross : 0, board.circle : 0, board.blank : 0}
-	pcross=PlayerPlus(board, board.cross)
-	pcircle=Player(board, board.circle)
+	
+	pcross=FunctionalPlayer(board, board.cross, onemove_value_function)
+	#pcross=OneMovePlayer(board, board.cross)
+	#pcircle=FunctionalPlayer(board, board.circle, onemove_value_function)
+	#pcircle=OneMovePlayer(board, board.circle)
+	pcircle=RandomPlayer(board, board.circle)
 	game=Game(board, pcross, pcircle, verbose=False)
-	for i in range(0,10):
+	for i in range(0,1000):
 		game.reset()
 		w=game.play()
 		result[w]+=1
@@ -400,8 +542,11 @@ if True:
 	#else:
 	#	print("============== Winner is  - {}  ==================".format(w))
 
-
 print(result)
+
+
+
+
 
 
 
