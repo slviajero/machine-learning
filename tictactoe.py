@@ -1,9 +1,13 @@
 from random import randrange, random 
+import pickle
 
-
+#
+# the Board class contains the game logic and a helper functions 
+# to evaluate the Board state, its history 
+#
 class Board:
 
-	def __init__(self):
+	def __init__(self, preload=('x'), autoscan=True):
 
 		# basic parameters
 		self.dim=3
@@ -12,8 +16,12 @@ class Board:
 		self.blank=' '
 		
 		# variables of the board
-		self.board=self.emptyboard()
-		self.status=self.scan()
+		if preload==('x'):
+			self.board=self.emptyboard()
+		else:
+			self.board=self.preloadboard(preload)
+		if autoscan:
+			self.status=self.scan()
 		self.history=[]
 
 	def print(self):
@@ -36,18 +44,29 @@ class Board:
 			b.append(emptyline[:])
 		return b
 
-	def erase(self):
+	def preloadboard(self, tuple):
+		b=[]
+		for i in range(0,self.dim):
+			line=[]
+			for j in range(0, self.dim):
+				line.append(tuple[i][j])
+			b.append(line[:])
+		return b
+
+	def erase(self, autoscan=True):
 		self.board=self.emptyboard()
-		self.status=self.scan()
+		if autoscan:
+			self.status=self.scan()
 		self.history=[]
 
-	def copy(self):
+	def copy(self, autoscan=True):
 		b=Board()
 		for i in range(0,self.dim):
 			for j in range(0,self.dim):
 				b.board[i][j]=self.board[i][j]
 		b.history=self.history.copy()
-		b.status=b.scan()
+		if autoscan:
+			b.status=b.scan()
 		return b
 
 	def allowed_moves(self):
@@ -278,7 +297,7 @@ class Board:
 
 		return status
 
-	def move(self, m, s):
+	def move(self, m, s, autoscan=True):
 		moves=self.status['moves']
 		if m in moves:
 			 if s==self.cross:
@@ -292,7 +311,8 @@ class Board:
 			print("Illegal move")
 			raise ValueError
 		self.history.append((m, s))
-		self.status=self.scan()
+		if autoscan:
+			self.status=self.scan()
 		return self.winner()
 
 	def replay(self, history, n=9):
@@ -315,6 +335,222 @@ class Board:
 	def winner(self):
 		return self.status['winner']
 
+	def tuplize(self):
+		list=[]
+		for line in self.board:
+			list.append(tuple(line))
+		return tuple(list)
+
+# 
+# This class generates and index consiting of all possible board
+# states and stores the index into a file, to each index value 
+# the is a tag assigned 
+#	tag values:  x - cross  has won - mapped to 1
+#			     o - circle has won - mapped to -1 
+#				' ' - a draw - mapped to 0.25 statically 
+#				0.0 - all other moves are real number 
+# these tage values are the first derivative of a true value function
+# 	tag(b, move)=v(b+m)-v(b)
+# to generate the value function an initial value has to be determined
+# and then this function has to be used to evaluate moves
+# the function function() uses 1 as an initial value setting a loss to 
+# to 0, a win to 2 and a draw to 1.25, all other moves to 1. 
+# with this definition FunctionalPlayer can play a value function 
+# defined over an index. 
+# we reverse win and lose depending on the symbol we play this doesn't work 
+# well in a learning situation
+# 
+
+class ValueFunction:
+
+	def __init__(self):
+		self.values={}
+
+	#
+	# evaluates all possible moves using the value function 
+	# and an heuristic that assignes a transition function 
+	# to to the deltas of current and next state 
+	#
+	def evaluate(self, board, mysymbol):
+
+		greedy_moves=[]
+		exploratory_moves=[]
+		deltas=[]
+		moves=board.status['moves']
+		t1=board.tuplize()
+		for move in moves:
+			b=board.copy(autoscan=False)
+			b.move(move, mysymbol, autoscan=False)
+			t2=b.tuplize()
+			delta=self.function(t2, mysymbol)-self.function(t1, mysymbol)
+			deltas.append(delta)
+			if delta>0.0: 
+				greedy_moves.append((move, delta, 'g'))
+			else:
+				exploratory_moves.append((move, delta, 'e'))
+		if len(deltas)>0:
+			minimum=min(deltas)
+			maximum=max(deltas)
+		weighted_moves=[]
+		for g in greedy_moves:
+			move=g[0]
+			value=g[1]*100+1
+			weighted_moves.append((move, value, 'g'))
+		for e in exploratory_moves:
+			move=e[0]
+			if minimum==0 and e[1]==0:
+				value=0.01
+			else:
+				value=e[1]/minimum*0.5
+			weighted_moves.append((move, value, 'e'))
+		evaluated_moves=[]
+		total_weight=0
+		for w in weighted_moves:
+			move=w[0]
+			weight=w[1]
+			getype=w[2]
+			total_weight+=weight
+			evaluated_moves.append((move, total_weight, getype))
+		return evaluated_moves		
+
+	#
+	# takes a tuple, looks up the index and gets the value
+	# depending on the role we play (cross or circle)
+	# the value is reversed 2.0 is winner, 0.25 is draw,
+	# 0.0 is a loose, all other values are taken as is
+	# this has the character of a boundary condition of
+	# the value function in learning scenarios
+	#
+	def function(self, t, s='x'):
+		
+		try:
+			v=self.values[t]
+		except: 
+			raise ValueError
+
+		if s=='x':
+			m=1.0
+		else:
+			m=-1.0
+
+		if v=='x': 
+			v=1.0*m
+		elif v=='o':
+			v=-1.0*m
+		elif v==' ':
+			v=0.25
+		v=v+1.0
+		return v
+
+	#
+	# the learning function, it is called after the move 
+	# to adapt the function
+	#
+	def learn(self, board, move, symbol):
+		t1=board.tuplize()
+		b=board.copy()
+		b.move(move, symbol)
+		t2=b.tuplize()
+		v1=self.function(t1, symbol)
+		v2=self.function(t2, symbol)
+		delta=(v2-v1)*0.1
+		state=self.values[t1]
+		if state!='x' and state!='o' and state!=' ':
+			if (symbol=='x'):
+				self.values.update({t1 : state+delta})
+			else:
+				self.values.update({t1 : state-delta})
+			#print("Update ", delta)
+		return
+
+	# 
+	# recursive function that generates all possible 
+	# game scenarios and build up the index from tuples
+	# it does not use the symmetries and results in 
+	# 5500 indices
+	#
+	def generateindex(self, b=None, s=''):
+
+		if b==None:
+			b=Board()
+			self.values.update({b.tuplize() : 0.0})
+		if s=='' or s==b.circle: 
+			next_s=b.cross
+		else:
+			next_s=b.circle
+		for m in b.status['moves']:
+			b_next=b.copy()
+			b_next.move(m, next_s)
+			winner=b_next.winner()
+			if winner=='n':
+				self.values.update({b_next.tuplize() : 0.0})
+				self.generateindex(b_next, next_s)
+			elif winner==' ':
+				value=' '
+				self.values.update({b_next.tuplize() : value})
+			elif winner==b.cross:
+				value='x'
+				self.values.update({b_next.tuplize() : value})
+			else:
+				value='o'
+				self.values.update({b_next.tuplize() : value})
+		return self.values
+	#
+	# write the index to a file 
+	#
+	def writeindex(self):
+		f = open("file.pkl","wb")
+		pickle.dump(self.values,f)
+		f.close()
+
+	#
+	# read the index from a file 
+	#
+	def readindex(self):
+		f = open("file.pkl","rb")
+		self.values=pickle.load(f)
+		f.close()
+		return self.values
+
+	#
+	# linear arithemtic on value functions, not really needed
+	#
+
+	def multiply(self, a):
+		f=ValueFunction()
+		for v in self.values:
+			f.values[v]=self.values[v]*a
+		return f
+
+	def add(self, vf):
+		f=ValueFunction()
+		for v in self.values:
+			f.values[v]=vf.values[v]+self.values[v]
+		return f
+
+	#
+	# clone the value function over the same index
+	#
+	def clone(self):
+		f=ValueFunction()
+		for v in self.values:
+			f.values[v]=self.values[v]
+		return f
+
+#
+# The Player classes all inherit from RandomPlayer.
+#
+# 	RandomPlayer: 		play a random move every time called
+#	OneMoverPlayer: 	finds a winning and losing last move 
+#						and reacts to it, but otherwise plays randomly
+#	HumanPlayer: 		a human player module, asks for input and plays
+#	FunctionalPlayer: 	needs a value function as parameter 
+#						the value function accepts the board state, 
+#						derives all possible next moves and evalutes them
+#						assigning weights, the FunctionalPlayer selects
+#						a move randomly
+#
+
 class RandomPlayer:
 
 	def __init__(self, board, symbol):
@@ -334,6 +570,9 @@ class RandomPlayer:
 		r=randrange(0,n)
 		next_move=moves[r]
 		return next_move
+
+	def lastwords(self, w):
+		return
 
 class OneMovePlayer(RandomPlayer):
 
@@ -368,20 +607,26 @@ class OneMovePlayer(RandomPlayer):
 
 class FunctionalPlayer(RandomPlayer):
 
-	def __init__(self, board, symbol, function):
-		self.function=function
+	def __init__(self, board, symbol, evaluate, learn=None):
+		self.evaluate=evaluate
+		if learn!=None:
+			self.learn=learn
+		else:
+			self.learn=lambda a, b, c : a
 		super().__init__(board, symbol)
 
 	def calculate(self, b):
 
 		board=b.board
 		status=b.status
-		evaluated_moves=[]
 
-		moves=status['moves']
-		evaluated_moves=self.function(b, self.mysymbol)
+		#
+		# walk through all moves of the board, evaluate them 
+		# and select one of them randomly
+		#
+		getype=''
+		evaluated_moves=self.evaluate(b, self.mysymbol)
 		total_weight=evaluated_moves[-1][1]
-
 		if total_weight>0:
 			r=random()*total_weight
 			weight1=0
@@ -389,10 +634,20 @@ class FunctionalPlayer(RandomPlayer):
 				weight2=evaluated_moves[i][1]
 				if (r>weight1) and (r<=weight2):
 					next_move=evaluated_moves[i][0]
+					if len(evaluated_moves[i])==3:
+						getype=evaluated_moves[i][2]
 					break
 				weight1=weight2
 		else:
 			raise ValueError
+
+		# here we know what of next move will be 
+		# and we know if it was a greedy of exploratory move
+		# from the variable getype, evaluators which do not
+		# support learning don't provide the infomation
+
+		if getype=='g':
+			self.learn(b, next_move, self.mysymbol) 
 
 		if False:
 			print("Board state:")
@@ -427,6 +682,17 @@ class HumanPlayer(RandomPlayer):
 				print("Move:", next_move)
 				return next_move
 
+	def lastwords(self, w):
+		if w==board.blank:
+			print("============== No winner - draw =================")
+		else:
+			print("============== Winner is  - {}  ==================".format(w))
+
+#
+# the Game class need a board, and two players, one for cross and one for circle
+# it plays the game until it has a winner
+#
+
 class Game:
 
 	def __init__(self, board, pcross, pcircle, verbose=False):
@@ -460,9 +726,31 @@ class Game:
 				print(w)
 			if w!='n':
 				break
-
 		return w
 
+	def lastwords(self, w):
+		self.pcross.lastwords(w)
+		self.pcircle.lastwords(w)
+
+#
+# stand alone value functions that work with the functional player class
+# the value function in this form generates values for each move (!)
+# the values are not normalized, there relative size is all that 
+# matters 
+# 
+# random_value_function: generates the same moves as RandomPlayer
+#							every move receives a weight 0.5
+# centercorner_value_function: tries to set a piece to 
+#							the center with weight 1.0
+#							a corner with weight 2.0
+#							any other field with weight 0.5
+# onemove_value_function: detects sure wins and losses like 
+#							the OneMovePlayer and in addition
+#							behaves like the centercorner function
+#							it is slightly stronger then OneMove
+# nextmove_value_function: like onemove and tries to look ahead
+#							one more move (not yet fully implemented)
+#
 
 def random_value_function(board, mysymbol):
 
@@ -473,9 +761,7 @@ def random_value_function(board, mysymbol):
 		move_value=0.5
 		total_weight+=move_value
 		evaluated_moves.append((move, total_weight))
-
 	return evaluated_moves
-
 
 def centercorner_value_function(board, symbol):
 
@@ -509,9 +795,9 @@ def onemove_value_function(board, symbol):
 	total_weight=0
 	for move in moves:
 		if move in i_win:
-			move_value=1000
+			move_value=10000
 		elif move in good_move:
-			move_value=10
+			move_value=100
 		else:
 			if move==(1,1):
 				move_value=1.0
@@ -523,26 +809,89 @@ def onemove_value_function(board, symbol):
 		evaluated_moves.append((move, total_weight))
 	return evaluated_moves
 
-if True:
-	board=Board()
-	result={board.cross : 0, board.circle : 0, board.blank : 0}
-	
-	pcross=FunctionalPlayer(board, board.cross, onemove_value_function)
-	#pcross=OneMovePlayer(board, board.cross)
-	#pcircle=FunctionalPlayer(board, board.circle, onemove_value_function)
-	#pcircle=OneMovePlayer(board, board.circle)
-	pcircle=RandomPlayer(board, board.circle)
-	game=Game(board, pcross, pcircle, verbose=False)
-	for i in range(0,1000):
-		game.reset()
-		w=game.play()
-		result[w]+=1
-	# if w==board.blank:
-	#	print("============== No winner - draw =================")
-	#else:
-	#	print("============== Winner is  - {}  ==================".format(w))
+def nextmove_value_function(board, symbol):
 
-print(result)
+	evaluated_moves=[]
+	moves=board.status['moves']
+	status=board.status
+	if symbol==board.circle:
+		i_win=status['circle_wins']
+		good_move=status['cross_wins']
+	else:
+		i_win=status['cross_wins']
+		good_move=status['circle_wins']
+
+	# the winning moves are treated here
+	total_weight=0
+	for move in moves:
+		if move in i_win:
+			move_value=1000
+		elif move in good_move:
+			move_value=20			
+		else:
+			# here we are in the dark and try the move, this is 
+			# not correctly written
+			# something is wrong - begin -
+			b=board.copy()
+			b.move(move, symbol)
+			new_status=b.scan()
+			if symbol==board.circle:
+				new_i_win=new_status['circle_wins']
+			else:
+				new_i_win=new_status['cross_wins']
+			if len(new_i_win)==1:
+				move_value=2
+			elif len(new_i_win)==2:
+				move_value=5	
+			# something is wrong - end -
+			else:
+				if move==(1,1):
+					move_value=1.0
+				elif move==(0,0) or move==(0,2) or move==(2,2) or move==(2, 0):
+					move_value=1.0
+				else:
+					move_value=0.25
+		total_weight+=move_value
+		evaluated_moves.append((move, total_weight))
+	return evaluated_moves
+
+if True:
+
+	# 
+	# a board and a dict to store the results
+	#
+	board=Board()
+
+	#
+	# create a dynamic value function
+	#
+	v=ValueFunction()
+	try:
+		print("Reading index")
+		v.readindex()
+	except:
+		print("Generating Index from scratch - takes one minute")
+		v.generateindex()
+		v.writeindex()	
+
+	# 
+	# the Players
+	#
+	pcross=FunctionalPlayer(board, board.cross, v.evaluate, v.learn)
+	pcircle=FunctionalPlayer(board, board.circle, onemove_value_function)
+	#pcircle=HumanPlayer(board, board.circle)
+
+	game=Game(board, pcross, pcircle, verbose=False)
+	for k in range(0,100):
+		result={board.cross : 0, board.circle : 0, board.blank : 0}
+		for i in range(0,1000):
+			game.reset()
+			w=game.play()
+			game.lastwords(w)
+			result[w]+=1
+		print(k, result)
+
+
 
 
 
